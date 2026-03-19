@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "Election": {
+      "title": "Election",
+      "description": "A condominium election",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "adminId": { "type": "string" },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" }
+            },
+            "required": ["id", "name"]
+          }
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "text": { "type": "string" }
+            },
+            "required": ["id", "text"]
+          }
+        },
+        "voterEmails": {
+          "type": "array",
+          "items": { "type": "string", "format": "email" }
+        }
+      },
+      "required": ["title", "startTime", "endTime", "adminId"]
+    },
+    "Pin": {
+      "title": "Pin",
+      "description": "A single-use voting PIN",
+      "type": "object",
+      "properties": {
+        "electionId": { "type": "string" },
+        "used": { "type": "boolean" },
+        "candidateId": { "type": "string" },
+        "optionId": { "type": "string" },
+        "email": { "type": "string", "format": "email" }
+      },
+      "required": ["electionId", "used"]
+    }
+  },
+  "firestore": {
+    "elections/{electionId}": {
+      "schema": "Election",
+      "description": "Stores all elections"
+    },
+    "pins/{pinId}": {
+      "schema": "Pin",
+      "description": "Stores all voting PINs"
+    }
+  }
+}

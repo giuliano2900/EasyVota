@@ -1,0 +1,5 @@
+{
+  "name": "Votazioni Caseggiato",
+  "description": "App per elezioni delegato caseggiato con voto segreto e univoco per appartamento.",
+  "requestFramePermissions": []
+}

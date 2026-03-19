@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: elections
+    // Document ID: auto-generated
+    // Fields:
+    //   - title: string (required, max 100 chars)
+    //   - startTime: timestamp (required)
+    //   - endTime: timestamp (required)
+    //   - adminId: string (required, immutable)
+    //   - candidates: list of objects {id: string, name: string} (required)
+    //
+    // Collection: pins
+    // Document ID: random 6-8 char string
+    // Fields:
+    //   - electionId: string (required, immutable)
+    //   - used: boolean (required)
+    //   - candidateId: string (optional, only present when used == true)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Domain Validators
+    function isValidElection() {
+      return hasRequiredFields(['title', 'startTime', 'endTime', 'adminId'])
+             && hasOnlyAllowedFields(['title', 'startTime', 'endTime', 'adminId', 'candidates', 'options', 'voterEmails'])
+             && request.resource.data.title is string
+             && request.resource.data.title.size() > 0
+             && request.resource.data.title.size() <= 100
+             && request.resource.data.startTime is timestamp
+             && request.resource.data.endTime is timestamp
+             && request.resource.data.adminId is string
+             && (!('candidates' in request.resource.data) || (request.resource.data.candidates is list && request.resource.data.candidates.size() > 0 && request.resource.data.candidates.size() <= 50))
+             && (!('options' in request.resource.data) || (request.resource.data.options is list && request.resource.data.options.size() > 0 && request.resource.data.options.size() <= 50))
+             && (!('voterEmails' in request.resource.data) || (request.resource.data.voterEmails is list && request.resource.data.voterEmails.size() <= 500));
+    }
+
+    function isValidPinCreate() {
+      return hasRequiredFields(['electionId', 'used'])
+             && hasOnlyAllowedFields(['electionId', 'used', 'email'])
+             && request.resource.data.electionId is string
+             && request.resource.data.used == false
+             && (!('email' in request.resource.data) || (request.resource.data.email is string && request.resource.data.email.size() <= 100));
+    }
+
+    function isValidPinUpdate() {
+      return hasRequiredFields(['electionId', 'used'])
+             && hasOnlyAllowedFields(['electionId', 'used', 'candidateId', 'optionId', 'email'])
+             && areImmutableFieldsUnchanged(['electionId', 'email'])
+             && request.resource.data.used == true
+             && resource.data.used == false
+             && (!('candidateId' in request.resource.data) || (request.resource.data.candidateId is string && request.resource.data.candidateId.size() > 0 && request.resource.data.candidateId.size() <= 100))
+             && (!('optionId' in request.resource.data) || (request.resource.data.optionId is string && request.resource.data.optionId.size() > 0 && request.resource.data.optionId.size() <= 100));
+    }
+
+    match /elections/{electionId} {
+      // Anyone can read an election (to see if it's open, candidates, etc.)
+      allow read: if true;
+
+      // Only authenticated users can create an election, and they must set themselves as admin
+      allow create: if isAuthenticated()
+                    && isValidElection()
+                    && request.resource.data.adminId == request.auth.uid;
+
+      // Only the admin can update their election
+      allow update: if isAuthenticated()
+                    && isValidElection()
+                    && resource.data.adminId == request.auth.uid
+                    && areImmutableFieldsUnchanged(['adminId']);
+
+      // Only the admin can delete their election
+      allow delete: if isAuthenticated()
+                    && resource.data.adminId == request.auth.uid;
+    }
+
+    match /pins/{pinId} {
+      // Anyone can get a specific PIN to check if it's valid and to vote.
+      allow get: if true;
+
+      // Only the admin of the election can list all PINs for that election.
+      allow list: if isAuthenticated()
+                  && get(/databases/$(database)/documents/elections/$(resource.data.electionId)).data.adminId == request.auth.uid;
+
+      // Only the admin of the election can create PINs
+      allow create: if isAuthenticated()
+                    && isValidPinCreate()
+                    && get(/databases/$(database)/documents/elections/$(request.resource.data.electionId)).data.adminId == request.auth.uid;
+
+      // A voter can update a PIN to cast a vote.
+      allow update: if isValidPinUpdate()
+                    && areImmutableFieldsUnchanged(['electionId'])
+                    && resource.data.used == false // Can only vote once
+                    // Check if election is open
+                    && request.time >= get(/databases/$(database)/documents/elections/$(resource.data.electionId)).data.startTime
+                    && request.time <= get(/databases/$(database)/documents/elections/$(resource.data.electionId)).data.endTime;
+
+      // Only admin can delete PINs
+      allow delete: if isAuthenticated()
+                    && get(/databases/$(database)/documents/elections/$(resource.data.electionId)).data.adminId == request.auth.uid;
+    }
+  }
+}
