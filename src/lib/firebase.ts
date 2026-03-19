@@ -9,10 +9,18 @@ export const auth = getAuth(app);
 
 export const loginWithGoogle = async () => {
   const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({
+    prompt: 'select_account'
+  });
   try {
     await signInWithPopup(auth, provider);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error signing in with Google", error);
+    if (error.code === 'auth/popup-blocked') {
+      alert("Il popup di accesso è stato bloccato dal browser. Per favore, consenti i popup per questo sito (in alto a destra nella barra degli indirizzi) oppure apri l'app in una nuova scheda.");
+    } else {
+      alert(`Errore durante l'accesso: ${error.message}`);
+    }
   }
 };
 
