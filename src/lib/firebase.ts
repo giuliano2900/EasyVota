@@ -17,9 +17,13 @@ export const loginWithGoogle = async () => {
   } catch (error: any) {
     console.error("Error signing in with Google", error);
     if (error.code === 'auth/popup-blocked') {
-      alert("Il popup di accesso è stato bloccato dal browser. Per favore, consenti i popup per questo sito (in alto a destra nella barra degli indirizzi) oppure apri l'app in una nuova scheda.");
+      console.warn("Il popup di accesso è stato bloccato dal browser. Per favore, consenti i popup per questo sito oppure apri l'app in una nuova scheda.");
+    } else if (error.code === 'auth/popup-closed-by-user') {
+      console.log("Accesso annullato: il popup è stato chiuso.");
+    } else if (error.code === 'auth/cancelled-popup-request') {
+      console.log("Accesso annullato: richieste multiple.");
     } else {
-      alert(`Errore durante l'accesso: ${error.message}`);
+      console.error(`Errore durante l'accesso: ${error.message}`);
     }
   }
 };
