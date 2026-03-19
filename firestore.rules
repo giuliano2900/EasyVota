@@ -46,6 +46,11 @@ service cloud.firestore {
     }
 
     // Domain Validators
+    function isAdminOfElection(electionId) {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/elections/$(electionId)).data.adminId == request.auth.uid;
+    }
+
     function isValidElection() {
       return hasRequiredFields(['title', 'startTime', 'endTime', 'adminId'])
              && hasOnlyAllowedFields(['title', 'startTime', 'endTime', 'adminId', 'candidates', 'options', 'voterEmails'])
@@ -62,7 +67,7 @@ service cloud.firestore {
 
     function isValidPinCreate() {
       return hasRequiredFields(['electionId', 'used'])
-             && hasOnlyAllowedFields(['electionId', 'used', 'email'])
+             && (hasOnlyAllowedFields(['electionId', 'used', 'email']) || hasOnlyAllowedFields(['electionId', 'used']))
              && request.resource.data.electionId is string
              && request.resource.data.used == false
              && (!('email' in request.resource.data) || (request.resource.data.email is string && request.resource.data.email.size() <= 100));
@@ -88,14 +93,12 @@ service cloud.firestore {
                     && request.resource.data.adminId == request.auth.uid;
 
       // Only the admin can update their election
-      allow update: if isAuthenticated()
+      allow update: if isAdminOfElection(electionId)
                     && isValidElection()
-                    && resource.data.adminId == request.auth.uid
                     && areImmutableFieldsUnchanged(['adminId']);
 
       // Only the admin can delete their election
-      allow delete: if isAuthenticated()
-                    && resource.data.adminId == request.auth.uid;
+      allow delete: if isAdminOfElection(electionId);
     }
 
     match /pins/{pinId} {
@@ -103,25 +106,19 @@ service cloud.firestore {
       allow get: if true;
 
       // Only the admin of the election can list all PINs for that election.
-      allow list: if isAuthenticated()
-                  && get(/databases/$(database)/documents/elections/$(resource.data.electionId)).data.adminId == request.auth.uid;
+      allow list: if isAdminOfElection(resource.data.electionId);
 
       // Only the admin of the election can create PINs
-      allow create: if isAuthenticated()
-                    && isValidPinCreate()
-                    && get(/databases/$(database)/documents/elections/$(request.resource.data.electionId)).data.adminId == request.auth.uid;
+      allow create: if isAdminOfElection(request.resource.data.electionId)
+                    && isValidPinCreate();
 
       // A voter can update a PIN to cast a vote.
-      allow update: if isValidPinUpdate()
-                    && areImmutableFieldsUnchanged(['electionId'])
-                    && resource.data.used == false // Can only vote once
-                    // Check if election is open
-                    && request.time >= get(/databases/$(database)/documents/elections/$(resource.data.electionId)).data.startTime
-                    && request.time <= get(/databases/$(database)/documents/elections/$(resource.data.electionId)).data.endTime;
+      // Or admin can update (overwrite) if needed
+      allow update: if (isValidPinUpdate() && resource.data.used == false && request.time >= get(/databases/$(database)/documents/elections/$(resource.data.electionId)).data.startTime && request.time <= get(/databases/$(database)/documents/elections/$(resource.data.electionId)).data.endTime)
+                    || (isAdminOfElection(resource.data.electionId) && isValidPinCreate() && areImmutableFieldsUnchanged(['electionId']));
 
       // Only admin can delete PINs
-      allow delete: if isAuthenticated()
-                    && get(/databases/$(database)/documents/elections/$(resource.data.electionId)).data.adminId == request.auth.uid;
+      allow delete: if isAdminOfElection(resource.data.electionId);
     }
   }
 }

@@ -16,6 +16,7 @@ export default function ElectionDetails() {
   const [pins, setPins] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSendingEmails, setIsSendingEmails] = useState(false);
   const [numPinsToGenerate, setNumPinsToGenerate] = useState(1);
   const [generationMode, setGenerationMode] = useState<'anonymous' | 'email'>('anonymous');
   const [emailInput, setEmailInput] = useState('');
@@ -117,20 +118,19 @@ export default function ElectionDetails() {
           candidatePins.push(pinCode);
         }
         
-        // Check uniqueness in Firestore using chunks of 30 (Firestore 'in' limit)
-        const chunkSize = 30;
-        const chunks = [];
-        for (let i = 0; i < candidatePins.length; i += chunkSize) {
-          chunks.push(candidatePins.slice(i, i + chunkSize));
-        }
-        
+        // Check uniqueness in Firestore globally to avoid collisions across all elections
         const existingPinsInDb = new Set<string>();
+        const chunkSize = 10; // Use smaller chunks for parallel getDoc calls
         
-        for (const chunk of chunks) {
-          const q = query(collection(db, 'pins'), where(documentId(), 'in', chunk));
-          const snapshot = await getDocs(q);
-          snapshot.forEach(doc => {
-            existingPinsInDb.add(doc.id);
+        for (let i = 0; i < candidatePins.length; i += chunkSize) {
+          const chunk = candidatePins.slice(i, i + chunkSize);
+          const results = await Promise.all(
+            chunk.map(pinId => getDoc(doc(db, 'pins', pinId)))
+          );
+          results.forEach(snap => {
+            if (snap.exists()) {
+              existingPinsInDb.add(snap.id);
+            }
           });
         }
         
@@ -159,28 +159,95 @@ export default function ElectionDetails() {
         }
       }
 
-      const batch = writeBatch(db);
-      for (const pin of newPins) {
-        const { id: pinId, ...pinData } = pin;
-        const pinRef = doc(db, 'pins', pinId);
-        batch.set(pinRef, pinData);
-      }
+      if (newPins.length > 0) {
+        const batch = writeBatch(db);
+        for (const pin of newPins) {
+          const { id: pinId, ...pinData } = pin;
+          const pinRef = doc(db, 'pins', pinId);
+          batch.set(pinRef, pinData);
+        }
 
-      await batch.commit();
-      setPins([...pins, ...newPins]);
-      setNumPinsToGenerate(1);
+        await batch.commit();
+        setPins(prev => [...prev, ...newPins]);
+        setNumPinsToGenerate(1);
+        if (generationMode === 'email') {
+          setEmailInput('');
+          // Invia email automaticamente per i nuovi PIN generati
+          await sendPinsBatch(newPins);
+        }
+      }
     } catch (err) {
+      console.error("Errore generazione PIN:", err);
+      alert("Si è verificato un errore durante la generazione dei PIN. Verifica la tua connessione o i permessi.");
       handleFirestoreError(err, OperationType.WRITE, 'pins');
-      alert("Errore durante la generazione dei PIN.");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const sendEmail = (pin: string, email: string) => {
-    const subject = encodeURIComponent(`Il tuo PIN per la votazione: ${election.title}`);
-    const body = encodeURIComponent(`Ciao,\n\nEcco il tuo PIN personale e segreto per partecipare alla votazione "${election.title}".\n\nIl tuo PIN è: ${pin}\n\nVai su ${window.location.origin} per esprimere il tuo voto.\n\nGrazie.`);
-    window.open(`mailto:${email}?subject=${subject}&body=${body}`);
+  const sendPinsBatch = async (pinsToSend: any[]) => {
+    if (pinsToSend.length === 0) return;
+    
+    setIsSendingEmails(true);
+    try {
+      const response = await fetch('/api/send-pins-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pins: pinsToSend.map(p => ({ email: p.email, pin: p.id })),
+          electionTitle: election.title,
+          appUrl: window.location.origin
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Errore durante l\'invio delle email');
+      }
+
+      const results = await response.json();
+      if (results.failed > 0) {
+        alert(`Email inviate: ${results.success}. Errori: ${results.failed}.\n\nAlcuni errori:\n${results.errors.slice(0, 3).join('\n')}`);
+      } else {
+        alert(`Tutte le ${results.success} email sono state inviate con successo.`);
+      }
+    } catch (err: any) {
+      console.error("Errore invio batch email:", err);
+      alert(err.message || "Si è verificato un errore durante l'invio delle email. Verifica la configurazione SMTP.");
+    } finally {
+      setIsSendingEmails(false);
+    }
+  };
+
+  const sendEmail = async (pin: string, email: string) => {
+    setIsSendingEmails(true);
+    try {
+      const response = await fetch('/api/send-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          pin,
+          electionTitle: election.title,
+          appUrl: window.location.origin
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Errore durante l\'invio dell\'email');
+      }
+
+      alert(`Email inviata con successo a ${email}`);
+    } catch (err: any) {
+      console.error("Errore invio email:", err);
+      // Fallback a mailto se l'API fallisce (es. SMTP non configurato)
+      const subject = encodeURIComponent(`Il tuo PIN per la votazione: ${election.title}`);
+      const body = encodeURIComponent(`Ciao,\n\nEcco il tuo PIN personale e segreto per partecipare alla votazione "${election.title}".\n\nIl tuo PIN è: ${pin}\n\nVai su ${window.location.origin} per esprimere il tuo voto.\n\nGrazie.`);
+      window.open(`mailto:${email}?subject=${subject}&body=${body}`);
+    } finally {
+      setIsSendingEmails(false);
+    }
   };
 
   if (isLoading || !election) {
@@ -416,11 +483,11 @@ export default function ElectionDetails() {
                     </div>
                     <button
                       type="submit"
-                      disabled={isGenerating || !emailInput.trim()}
+                      disabled={isGenerating || isSendingEmails || !emailInput.trim()}
                       className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 transition-colors"
                     >
-                      {isGenerating ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Mail className="w-4 h-4 mr-2" />}
-                      Genera e Assegna PIN
+                      {isGenerating || isSendingEmails ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Mail className="w-4 h-4 mr-2" />}
+                      {isSendingEmails ? 'Invio Email...' : 'Genera e Invia PIN'}
                     </button>
                   </>
                 )}
@@ -456,9 +523,10 @@ export default function ElectionDetails() {
                             {pin.email && !pin.used && (
                               <button
                                 onClick={() => sendEmail(pin.id, pin.email)}
-                                className="inline-flex items-center px-2 py-1 border border-slate-300 shadow-sm text-xs font-medium rounded text-slate-700 bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                                disabled={isSendingEmails}
+                                className="inline-flex items-center px-2 py-1 border border-slate-300 shadow-sm text-xs font-medium rounded text-slate-700 bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
                               >
-                                <Mail className="w-3 h-3 mr-1" />
+                                {isSendingEmails ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Mail className="w-3 h-3 mr-1" />}
                                 Invia
                               </button>
                             )}
